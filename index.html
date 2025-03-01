@@ -657,23 +657,27 @@
     }
     
     // ウィンドウリサイズ時の処理
+    // ウィンドウリサイズ時の処理 - 強化バージョン
     function onWindowResize() {
-      // 画面方向を確認
       const wasLandscape = isLandscape;
+      const oldWidth = window.innerWidth;
+      const oldHeight = window.innerHeight;
+      
       checkOrientation();
       
-      // 向きが変わった場合
-      if (wasLandscape !== isLandscape && videoElement.srcObject) {
-        setVideoOrientation(videoElement.srcObject);
-        
-        // 画面を横向きに再固定
-        lockScreenOrientation();
-      }
-      
-      if (camera && renderer) {
-        camera.aspect = window.innerWidth / window.innerHeight;
-        camera.updateProjectionMatrix();
-        renderer.setSize(window.innerWidth, window.innerHeight);
+      // サイズと向き両方が大幅に変化した場合のみ再初期化
+      // 単純なリサイズ操作で完全再初期化が何度も呼ばれないように閾値を設定
+      if (wasLandscape !== isLandscape) {
+        // 向きが変わった場合は常に再初期化
+        console.log('リサイズによる向きの変更を検出: ' + (isLandscape ? '横向き' : '縦向き'));
+        reinitializeCamera();
+      } else {
+        // 向きが変わらない場合は通常のリサイズ処理のみ
+        if (camera && renderer) {
+          camera.aspect = window.innerWidth / window.innerHeight;
+          camera.updateProjectionMatrix();
+          renderer.setSize(window.innerWidth, window.innerHeight);
+        }
       }
     }
     
@@ -963,7 +967,7 @@
     
     // ゲームをリセット
     function resetGame() {
-      ninjaPosition = { x: 0, y: 0, z: -4 };
+      ninjaPosition = { x: 0, y: 0, z: -3 };
       ninjaVelocity = { x: 0, y: 0, z: 0 };
       isJumping = false;
       canDoubleJump = false;
@@ -1459,13 +1463,170 @@
       // カメラ初期化
       initCamera();
     }
+
+
+    // ビデオストリームを停止する関数
+    // ビデオストリームを停止する関数
+    function stopVideoStream() {
+      if (videoElement && videoElement.srcObject) {
+        const tracks = videoElement.srcObject.getTracks();
+        tracks.forEach(track => track.stop());
+        videoElement.srcObject = null;
+      }
+    }
+
+    // カメラとビデオストリーム、キャラクターを完全に再初期化する関数
+    function reinitializeCamera() {
+      console.log('カメラとビデオストリームを再初期化します...');
+      
+      // アニメーションを一時停止
+      if (animationFrameId) {
+        cancelAnimationFrame(animationFrameId);
+        animationFrameId = null;
+      }
+      
+      // キャラクター位置をリセット
+      ninjaPosition = { x: 0, y: 0, z: -3 };
+      ninjaVelocity = { x: 0, y: 0, z: 0 };
+      isJumping = false;
+      canDoubleJump = false;
+      hasDoubleJumped = false;
+      
+      // 既存のビデオストリームを停止
+      stopVideoStream();
+      
+      // 再初期化中であることを示すフラグ
+      let isReinitializing = true;
+      
+      // 再初期化中のローディングメッセージ表示（オプション）
+      // const loadingMessage = document.createElement('div');
+      // loadingMessage.textContent = 'カメラを調整中...';
+      // loadingMessage.style.position = 'fixed';
+      // loadingMessage.style.top = '50%';
+      // loadingMessage.style.left = '50%';
+      // loadingMessage.style.transform = 'translate(-50%, -50%)';
+      // loadingMessage.style.color = 'white';
+      // loadingMessage.style.background = 'rgba(0, 0, 0, 0.7)';
+      // loadingMessage.style.padding = '10px 20px';
+      // loadingMessage.style.borderRadius = '8px';
+      // loadingMessage.style.zIndex = '1000';
+      // document.body.appendChild(loadingMessage);
+      
+      // Three.jsの初期化をリセット
+      if (ninja) {
+        scene.remove(ninja);
+        ninja = null; // 明示的に参照をクリア
+      }
+      
+      // 新しいカメラアクセスを初期化
+      // 画面を横向きに固定
+      lockScreenOrientation();
+      
+      // カメラへのアクセス許可を要求
+      if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+        // カメラの方向設定
+        const constraints = {
+          video: {
+            facingMode: 'environment',
+            width: { ideal: window.innerWidth },
+            height: { ideal: window.innerHeight }
+          }
+        };
+        
+        navigator.mediaDevices.getUserMedia(constraints)
+          .then(function(stream) {
+            videoElement.srcObject = stream;
+            // カメラ向きを設定
+            setVideoOrientation(stream);
+            
+            videoElement.onloadedmetadata = function() {
+              videoElement.play();
+              
+              // Three.jsを再初期化
+              // 既存のカメラとレンダラーを再利用する場合
+              if (camera && renderer) {
+                // カメラのアスペクト比を更新
+                camera.aspect = window.innerWidth / window.innerHeight;
+                camera.updateProjectionMatrix();
+                
+                // カメラ位置をリセット
+                camera.position.set(0, 1, 3);
+                
+                // レンダラーのサイズを更新
+                renderer.setSize(window.innerWidth, window.innerHeight);
+              } else {
+                // 新規作成が必要な場合
+                initThreeJS();
+              }
+              
+              // キャラクターを再作成
+              createCharacter();
+              
+              // キャラクターの位置を明示的に設定
+              if (ninja) {
+                ninja.position.set(ninjaPosition.x, ninjaPosition.y, ninjaPosition.z);
+                ninja.rotation.set(0, 0, 0);
+                
+                // 個別のパーツの回転もリセット
+                if (isGameStarted) {
+                  const partsToReset = [
+                    'leftLeg', 'rightLeg', 'leftShoe', 'rightShoe', 
+                    'upperLeftArm', 'upperRightArm', 'lowerLeftArm', 'lowerRightArm',
+                    'leftHand', 'rightHand', 'thighs', 'waist'
+                  ];
+                  
+                  partsToReset.forEach(partName => {
+                    const part = ninja.getObjectByName(partName);
+                    if (part) {
+                      part.rotation.x = 0;
+                      part.rotation.z = 0;
+                    }
+                  });
+                }
+              }
+              
+              // 再初期化完了
+              isReinitializing = false;
+              
+              // ローディングメッセージを削除
+              // document.body.removeChild(loadingMessage);
+              
+              // ゲームが開始されていた場合、アニメーションを再開
+              if (isGameStarted) {
+                animate();
+              }
+            };
+          })
+          .catch(function(error) {
+            console.error('カメラへのアクセスエラー:', error);
+            // 再初期化完了、エラー表示
+            isReinitializing = false;
+            // document.body.removeChild(loadingMessage);
+            
+            // カメラアクセス許可モーダルを表示
+            cameraModal.classList.remove('hidden');
+          });
+      } else {
+        console.error('getUserMedia未対応のブラウザです');
+        alert('お使いのブラウザはカメラ機能に対応していません。別のブラウザをお試しください。');
+        isReinitializing = false;
+        // document.body.removeChild(loadingMessage);
+      }
+    }
     
-    // 画面回転時の処理
+    // 画面回転時の処理 - 強化バージョン
     function handleOrientationChange() {
       // 少し遅延を設けて実行（回転アニメーション中に実行すると正確でない場合がある）
       setTimeout(() => {
-        onWindowResize();
-      }, 300);
+        const wasLandscape = isLandscape;
+        checkOrientation();
+        
+        // 向きが変わった場合のみ完全な再初期化を実行
+        if (wasLandscape !== isLandscape) {
+          console.log('画面の向きが変わりました: ' + (isLandscape ? '横向き' : '縦向き'));
+          reinitializeCamera();
+        }
+      }, 500); // タイミングを少し長めに（300ms→500ms）
     }
     
     // 画面を横向きに固定
